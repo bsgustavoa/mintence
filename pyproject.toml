@@ -1,0 +1,25 @@
+# Mintence -- bsgustavoa (#dheg)
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mintence"
+version = "0.1.0"
+description = "Open-source sentence mining for English, with open dictionary data from Wiktionary"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "bsgustavoa" }]
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["english", "vocabulary", "sentence mining", "dictionary", "wiktionary", "language learning"]
+
+[project.urls]
+Homepage = "https://github.com/bsgustavoa/mintence"
+
+[project.scripts]
+mintence = "mintence:main"
+
+[tool.setuptools]
+py-modules = ["mintence"]

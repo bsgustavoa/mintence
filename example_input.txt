@@ -1,0 +1,18 @@
+# Entries are separated by blank lines.
+# Sentence on one line, the word or expression on the next.
+# A word alone (no sentence) lets you pick a dictionary example.
+# The (number) at the top is optional: it sets the first entry number.
+# Lines starting with "# " are comments.
+
+(100)
+
+The police carried out a thorough investigation.
+thorough
+
+It took me a while to figure out how the program works.
+figure out
+
+The host told a joke to break the ice.
+break the ice
+
+embody

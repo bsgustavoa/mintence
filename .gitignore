@@ -1,0 +1,12 @@
+# personal files
+mining*.txt
+mintence*.txt
+mintence_*.log
+input*.txt
+
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
