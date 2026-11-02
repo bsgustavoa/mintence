@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Mintence -- bsgustavoa (#dheg)
-"""mintence: open-source sentence mining for English, with data from Wiktionary.
+"""Mintence: open-source sentence mining for English, with data from Wiktionary.
 
 Give it the sentence where you found a word, choose the sense that fits, and get
 an entry with part of speech, pronunciations and definition.
@@ -66,6 +66,9 @@ LABELS = {"informal", "formal", "colloquial", "slang", "humorous", "derogatory",
 HIDDEN = {"obsolete", "archaic", "dated", "rare", "dialectal", "nonstandard", "misspelling",
           "historical", "uncommon", "poetic", "no-gloss"}
 
+POS_TAIL = re.compile(r"(?:,?\s+(?:%s))+$" % "|".join(sorted(
+    set(POS_NAMES.values()) | {"noun", "verb", "phrasal verb", "modal verb", "auxiliary verb", "idiom"},
+    key=len, reverse=True)))  # the part of speech at the end of a header
 SPELLING_OF = re.compile(r"\bstandard spelling of ([^.,;]+)")  # colour -> color
 
 _last_request = 0.0
@@ -343,24 +346,42 @@ def choose_entry(entries):
     return entries[i - 1] if i else None
 
 
-def show_senses(senses, context):
+def shown_senses(entry):
+    """Old and rare senses stay hidden until asked for, unless they are all the word has."""
+    return [s for s in entry.senses if not s.hidden] or entry.senses
+
+
+def marked(sense, prior):
+    nums = [n for n, definition in prior if definition == sense.line]
+    return f"{sense.line}  [already mined: {listing(nums)}]" if nums else sense.line
+
+
+def add_again(sense, prior):
+    """Ask before repeating a sense that is already mined; other senses need no question."""
+    nums = [n for n, definition in prior if definition == sense.line]
+    if not nums:
+        return True
+    return ask(f"Already mined as {listing(nums)}. Add it again? [y/N] ").lower() in ("y", "yes")
+
+
+def show_senses(senses, context, prior=()):
     for i, s in enumerate(senses, 1):
-        print(f"  {i}. {s.line}")
+        print(f"  {i}. {marked(s, prior)}")
         if not context:
             for j, x in enumerate(s.examples):
                 print(f"       {chr(97 + j)}) {x}")
 
 
-def choose_sense(entry, context):
-    """Return (sense, sentence), or None to skip. Old and rare senses stay
-    hidden until asked for, unless they are all the word has."""
+def choose_sense(entry, context, prior=()):
+    """Return (sense, sentence), or None to skip. prior: [(number, definition)]
+    of this word in the mining file."""
     print(f"\n{entry.header}")
-    senses = [s for s in entry.senses if not s.hidden] or entry.senses
+    senses = shown_senses(entry)
     extra = len(entry.senses) - len(senses)
     if context and len(senses) == 1 and not extra:
-        print(f"  {senses[0].line}")
-        return senses[0], context
-    show_senses(senses, context)
+        print(f"  {marked(senses[0], prior)}")
+        return (senses[0], context) if add_again(senses[0], prior) else None
+    show_senses(senses, context, prior)
     while True:
         more = f"; a = show {extra} old or rare" if extra else ""
         hint = "number" if context else "number + example letter, e.g. 1a"
@@ -369,7 +390,7 @@ def choose_sense(entry, context):
             return None
         if a == "a" and extra:
             senses, extra = entry.senses, 0
-            show_senses(senses, context)
+            show_senses(senses, context, prior)
             continue
         m = re.fullmatch(r"(\d+)([a-z]?)", a)
         n = len(senses)
@@ -378,15 +399,15 @@ def choose_sense(entry, context):
                   + ", or s to skip")
             continue
         sense = senses[int(m[1]) - 1]
-        if context:
-            return sense, context
-        if m[2]:
-            j = ord(m[2]) - 97
-            if j < len(sense.examples):
-                return sense, sense.examples[j]
+        j = ord(m[2]) - 97 if m[2] and not context else None
+        if j is not None and j >= len(sense.examples):
             print(f"  sense {m[1]} has {plural(len(sense.examples), 'example', 'examples')}")
             continue
-        return sense, ask_sentence(sense)
+        if not add_again(sense, prior):
+            return None
+        if context:
+            return sense, context
+        return sense, sense.examples[j] if j is not None else ask_sentence(sense)
 
 
 def ask_sentence(sense):
@@ -476,7 +497,7 @@ def load_config():
 
 def setup():
     """Ask where to save files and which main mining file to use; store the answers."""
-    print("mintence setup (run 'mintence --setup' to change it later)\n")
+    print("Mintence setup (run 'mintence --setup' to change it later)\n")
     output = ask(f"Folder to save your files [{DEFAULT_OUTPUT}]: ") or str(DEFAULT_OUTPUT)
     output = Path(output).expanduser().resolve()
     default = output / "mintence.txt"
@@ -512,23 +533,42 @@ def last_number(mining):
     return int(nums[-1]) if nums else 0
 
 
+def header_word(header):
+    """The word in an entry's header: "thorough adjective /ˈθʌɹə/" -> "thorough".
+    Expressions stay whole, so "break the ice" does not count as "break"."""
+    head = re.split(r"\s+/", header.strip())[0].rstrip(" ,")
+    return POS_TAIL.sub("", head).casefold()
+
+
 def mined_words(mining):
-    """{header line: [entry numbers]} for the entries already in the mining file."""
+    """{word: [(entry number, definition)]} for the entries in the mining file."""
     found = {}
     if mining and Path(mining).is_file():
-        for num, header in re.findall(r"^\((\d+)\)\n[^\n]*\n([^\n]*)", read_text(mining), re.M):
-            found.setdefault(header.strip(), []).append(num)
+        pattern = r"^\((\d+)\)[ \t]*\n[^\n]*\n([^\n]*)\n?([^\n]*)"
+        for num, header, definition in re.findall(pattern, read_text(mining), re.M):
+            found.setdefault(header_word(header), []).append((num, definition.strip()))
     return found
 
 
-def already_mined(entry, mined):
-    nums = [n for header, ns in mined.items()
-            if header == entry.word or header.startswith(entry.word + " ") for n in ns]
-    if nums:
-        where = ", ".join(f"({n})" for n in nums[:3])
-        if len(nums) > 3:
-            where += f" and {len(nums) - 3} more"
-        print(f"  note: “{entry.word}” is already in your mining file as {where}")
+def listing(nums):
+    where = ", ".join(f"({n})" for n in nums[:3])
+    return where + (f" and {len(nums) - 3} more" if len(nums) > 3 else "")
+
+
+def mined_before(entry, mined):
+    """This word's earlier entries. Those that match no sense on the list (another
+    part of speech, another source) are shown here, so they can be compared."""
+    prior = [m for key in {entry.word.casefold(), header_word(entry.header)}
+             for m in mined.get(key, [])]
+    shown = {s.line for s in shown_senses(entry)}
+    others = [m for m in prior if m[1] not in shown]
+    if others:
+        print(f"  note: “{entry.word}” is already mined:")
+        for num, definition in others[:3]:
+            print(f"    ({num}) {definition}")
+        if len(others) > 3:
+            print(f"    and {len(others) - 3} more")
+    return prior
 
 
 def start_number(args, config, from_input=None):
@@ -616,8 +656,7 @@ def run_round(batch, start, mined, offset, total):
             if entry is None:
                 skipped.append(item.word)
                 continue
-            already_mined(entry, mined)
-            picked = choose_sense(entry, item.context)
+            picked = choose_sense(entry, item.context, mined_before(entry, mined))
             if not picked:
                 skipped.append(item.word)
                 continue
@@ -625,7 +664,9 @@ def run_round(batch, start, mined, offset, total):
             print("\nInterrupted; keeping the entries already chosen.")
             return blocks, skipped, to_fix, later, i, True
         sense, sentence = picked
-        blocks.append(f"({start + len(blocks)})\n{sentence}\n{entry.header}\n{sense.line}\n")
+        number = start + len(blocks)
+        blocks.append(f"({number})\n{sentence}\n{entry.header}\n{sense.line}\n")
+        mined.setdefault(header_word(entry.header), []).append((str(number), sense.line))
     return blocks, skipped, to_fix, later, len(batch), False
 
 
@@ -732,10 +773,11 @@ def main():
     keep_number = args.start is not None or given_start is not None or (
         not args.mining and not Path(config.get("mining") or "").is_file())
     mining = args.mining or config.get("mining")
+    mined = mined_words(mining)  # entries chosen during this run are added to it
     pos, number, skipped, to_fix, later = 0, start, [], [], []
     while pos < len(items):
         blocks, sk, fix, lat, done, interrupted = run_round(
-            items[pos:pos + MAX_WORDS], number, mined_words(mining), pos, len(items))
+            items[pos:pos + MAX_WORDS], number, mined, pos, len(items))
         pos += done
         skipped += sk
         to_fix += fix
@@ -766,7 +808,7 @@ def main():
             print(f"({len(to_fix)} marked “# check”: fix the blank lines before running it)")
         print(f"Continue with: mintence {path}")
     elif args.input and re.search(r"_remaining(_\d+)?$", Path(args.input).stem):
-        Path(args.input).unlink()  # a file mintence created, now fully done
+        Path(args.input).unlink()  # a file Mintence created, now fully done
         print(f"\nAll done; removed {args.input}")
 
 
