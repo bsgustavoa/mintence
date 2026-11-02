@@ -137,7 +137,7 @@ The first number of a run comes from, in order: `-n`, `-m`, `(number)` in the in
 
 ## Good to know
 
-- **Internet.** The first lookup of a word needs a connection, with at most one download per second. The word is then kept in `~/.cache/mintence` for 90 days.
+- **Internet.** The first lookup of a word needs a connection, with at most one download per second. Only the word itself is sent, never your sentences or your files. The word is then kept in `~/.cache/mintence` for 90 days.
 - **Long lists** are done in rounds of 10. After each round, the entries are saved and Mintence asks whether to continue.
 - **Stopping halfway.** Answer `n` or press Ctrl+C, and the entries already chosen are kept. The rest go to a file such as `input_remaining.txt`, and `mintence input_remaining.txt` picks up where you left off. Words that could not be downloaded go there too.
 - **Definitions** are written by volunteers, so some are more technical than in a learner's dictionary, and a few words and expressions are missing, especially those with special characters (*a.m.*, *and/or*).

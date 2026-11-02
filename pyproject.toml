@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mintence"
-version = "0.1.2"
+version = "0.1.3"
 description = "Open-source sentence mining for English, with open dictionary data from Wiktionary"
 readme = "README.md"
 license = { text = "MIT" }

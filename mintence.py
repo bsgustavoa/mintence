@@ -47,6 +47,8 @@ HEADERS = {"User-Agent": f"mintence/{VERSION} (https://github.com/bsgustavoa/min
 DELAY = 1.0      # seconds between requests
 MAX_WORDS = 10   # words per round
 CACHE_DAYS = 90  # how long a saved word stays fresh
+MAX_DOWNLOAD = 32_000_000  # bytes; the longest word has far less than this
+MAX_QUERY = 200  # characters
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mintence" / "config.json"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "mintence"
 DEFAULT_OUTPUT = Path.home() / "mintence-files"
@@ -69,6 +71,9 @@ HIDDEN = {"obsolete", "archaic", "dated", "rare", "dialectal", "nonstandard", "m
 POS_TAIL = re.compile(r"(?:,?\s+(?:%s))+$" % "|".join(sorted(
     set(POS_NAMES.values()) | {"noun", "verb", "phrasal verb", "modal verb", "auxiliary verb", "idiom"},
     key=len, reverse=True)))  # the part of speech at the end of a header
+# terminal control codes and characters that disguise text; dictionary data and files are not trusted
+UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+PATH_ERRORS = (OSError, ValueError, RuntimeError)  # too long, NUL byte, unknown ~user
 SPELLING_OF = re.compile(r"\bstandard spelling of ([^.,;]+)")  # colour -> color
 
 _last_request = 0.0
@@ -100,11 +105,31 @@ def plural(n, one, many):
     return f"{n} {one if n == 1 else many}"
 
 
+def scrub(value):
+    """A copy of text or JSON data without control codes (they stay out of the terminal and the files)."""
+    if isinstance(value, str):
+        return UNSAFE.sub(" ", value)
+    if isinstance(value, list):
+        return [scrub(v) for v in value]
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items()}
+    return value
+
+
+def is_file(path):
+    try:
+        return bool(path) and Path(path).is_file()
+    except PATH_ERRORS:
+        return False
+
+
 def read_text(path):
     try:
         return Path(path).read_text(encoding="utf-8-sig")  # also accepts a BOM
     except UnicodeDecodeError:
         sys.exit(f"mintence: {path} is not UTF-8 text; save it as UTF-8 and try again.")
+    except OSError as e:
+        sys.exit(f"mintence: could not read {path}: {e.strerror or e}")
 
 
 # ---------------------------------------------------------------- dictionary
@@ -119,7 +144,10 @@ def download(word):
     url = f"{SOURCE}{q(word[0], safe='')}/{q(word[:2], safe='')}/{q(word, safe='')}.jsonl"
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=25) as r:
-            return r.read().decode("utf-8")
+            data = r.read(MAX_DOWNLOAD + 1)
+            if len(data) > MAX_DOWNLOAD:
+                raise ValueError("the answer is too large")
+            return data.decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
@@ -129,11 +157,14 @@ def download(word):
 
 
 def parse_rows(text):
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    rows = [json.loads(line) for line in text.split("\n") if line.strip()]  # one per line, by \n only
+    return [scrub(row) for row in rows if isinstance(row, dict)]
 
 
 def rows_for(word):
     """All the data about a word, from the cache when it is still fresh."""
+    if len(word) > MAX_QUERY or not any(c.isalnum() for c in word):
+        return []  # cannot be a dictionary word: do not ask for it
     name = hashlib.sha1(word.encode("utf-8")).hexdigest()  # safe on any file system
     path = CACHE / f"{name}.jsonl"
     old = None
@@ -155,7 +186,7 @@ def rows_for(word):
     rows = parse_rows(text)
     try:
         CACHE.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
+        temp = path.with_name(f"{name}.{os.getpid()}.tmp")
         temp.write_text(text, encoding="utf-8")
         temp.replace(path)
     except OSError:
@@ -303,7 +334,7 @@ def lookup(query):
 
 def ask(prompt):
     try:
-        return input(prompt).strip()
+        return scrub(input(prompt)).strip()
     except EOFError:
         raise KeyboardInterrupt
 
@@ -318,7 +349,7 @@ def pick_number(prompt, n, default=None):
         a = ask(prompt).lower() or (str(default) if default else "")
         if a == "s":
             return None
-        if a.isdecimal() and 1 <= int(a) <= n:
+        if a.isdecimal() and len(a) < 7 and 1 <= int(a) <= n:
             return int(a)
         print(f"  type a number from 1 to {n}, or s to skip")
 
@@ -392,7 +423,7 @@ def choose_sense(entry, context, prior=()):
             senses, extra = entry.senses, 0
             show_senses(senses, context, prior)
             continue
-        m = re.fullmatch(r"(\d+)([a-z]?)", a)
+        m = re.fullmatch(r"(\d{1,6})([a-z]?)", a)
         n = len(senses)
         if not m or not 1 <= int(m[1]) <= n:
             print(f"  type a number from 1 to {n}" + ("" if context else ", optionally with a letter")
@@ -446,7 +477,7 @@ def parse_entries(lines):
     """
     start, items, block = None, [], []
     for raw in list(lines) + [""]:
-        line = raw.strip()
+        line = scrub(raw).strip()
         if line == "#" or line.startswith("# "):
             continue
         if line:
@@ -454,7 +485,7 @@ def parse_entries(lines):
             continue
         if not block:
             continue
-        m = re.fullmatch(r"\((\d+)\)", block[0])
+        m = re.fullmatch(r"\((\d{1,15})\)", block[0])
         if m and start is None and not items:
             start = int(m[1])
             block = block[1:]
@@ -492,22 +523,32 @@ def load_config():
         config = json.loads(CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return config if isinstance(config, dict) else None
+    good = isinstance(config, dict) and all(isinstance(config.get(k, ""), str) for k in ("output", "mining"))
+    return config if good else None
 
 
 def setup():
     """Ask where to save files and which main mining file to use; store the answers."""
     print("Mintence setup (run 'mintence --setup' to change it later)\n")
-    output = ask(f"Folder to save your files [{DEFAULT_OUTPUT}]: ") or str(DEFAULT_OUTPUT)
-    output = Path(output).expanduser().resolve()
+    while True:
+        output = ask(f"Folder to save your files [{DEFAULT_OUTPUT}]: ") or str(DEFAULT_OUTPUT)
+        try:
+            output = Path(output).expanduser().resolve()
+            break
+        except PATH_ERRORS:
+            print("  that is not a valid path")
     default = output / "mintence.txt"
     while True:
         answer = ask(f"Your main mining file [{default}]: ")
-        mining = Path(answer).expanduser().resolve() if answer else default
-        if mining.is_file():
-            break
-        if mining.is_dir():
-            print(f"  {mining} is a folder; give the path of a file")
+        try:
+            mining = Path(answer).expanduser().resolve() if answer else default
+            if mining.is_file():
+                break
+            if mining.is_dir():
+                print(f"  {mining} is a folder; give the path of a file")
+                continue
+        except PATH_ERRORS:
+            print("  that is not a valid path")
             continue
         if answer and not yes(f"  {mining} does not exist. Create it?"):
             continue
@@ -520,33 +561,43 @@ def setup():
         print(f"  created {mining}")
         break
     config = {"output": str(output), "mining": str(mining)}
-    CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    print(f"\nSaved to {CONFIG}\n")
+    try:
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"\nSaved to {CONFIG}\n")
+    except OSError as e:
+        print(f"\nCould not save these settings, so they apply to this run only: {e}\n")
     return config
 
 
 # ---------------------------------------------------------------- mining file
 
 def last_number(mining):
-    nums = re.findall(r"^\((\d+)\)[ \t]*$", read_text(mining), re.M)  # not "(1999) was a year"
-    return int(nums[-1]) if nums else 0
+    """The last entry number. A number alone on its line, unless it is the
+    sentence right below an entry number; "(1999) was a year" does not count."""
+    last, after_number = 0, False
+    for line in read_text(mining).split("\n"):
+        m = re.fullmatch(r"\((\d{1,15})\)[ \t]*", line)
+        if m and not after_number:
+            last = int(m[1])
+        after_number = bool(m)
+    return last
 
 
 def header_word(header):
     """The word in an entry's header: "thorough adjective /ˈθʌɹə/" -> "thorough".
     Expressions stay whole, so "break the ice" does not count as "break"."""
-    head = re.split(r"\s+/", header.strip())[0].rstrip(" ,")
+    head = re.split(r" /", " ".join(header.split()))[0].rstrip(" ,")
     return POS_TAIL.sub("", head).casefold()
 
 
 def mined_words(mining):
     """{word: [(entry number, definition)]} for the entries in the mining file."""
     found = {}
-    if mining and Path(mining).is_file():
-        pattern = r"^\((\d+)\)[ \t]*\n[^\n]*\n([^\n]*)\n?([^\n]*)"
+    if is_file(mining):
+        pattern = r"^\((\d{1,15})\)[ \t]*\n[^\n]*\n([^\n]*)\n?([^\n]*)"
         for num, header, definition in re.findall(pattern, read_text(mining), re.M):
-            found.setdefault(header_word(header), []).append((num, definition.strip()))
+            found.setdefault(header_word(header), []).append((num, scrub(definition).strip()))
     return found
 
 
@@ -580,13 +631,13 @@ def start_number(args, config, from_input=None):
     if from_input is not None:
         return from_input
     mining = config.get("mining")
-    if mining and Path(mining).is_file():
+    if is_file(mining):
         return last_number(mining) + 1
     if mining:
         print(f"Saved mining file not found: {mining} (run 'mintence --setup' to change it)")
     while True:
         a = ask("First number [1]: ") or "1"
-        if a.isdecimal() and int(a) > 0:
+        if a.isdecimal() and len(a) < 16 and int(a) > 0:
             return int(a)
         print("  type a whole number, 1 or more")
 
@@ -648,8 +699,12 @@ def run_round(batch, start, mined, offset, total):
                 continue
             try:
                 entries = find_entries(item.word)
-            except (OSError, ValueError, http.client.HTTPException) as e:
+            except (OSError, http.client.HTTPException) as e:
                 print(f"  could not reach the dictionary ({e}); left for later")
+                later.append(item)
+                continue
+            except (ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
+                print(f"  could not read the dictionary's answer ({e}); left for later")
                 later.append(item)
                 continue
             entry = choose_entry(entries) if entries else None
@@ -680,11 +735,14 @@ def finish_round(blocks, start, args, config):
     folder = args.output or config.get("output") or "."
     try:
         print(f"{plural(len(blocks), 'entry', 'entries')} saved to {save_log(blocks, start, folder)}")
-    except OSError as e:
+    except PATH_ERRORS as e:
         print(f"Could not save the record in {folder}: {e}")
     main_file = config.get("mining")
-    if main_file and not args.mining and Path(main_file).is_file():
-        append_to_mining(blocks, start, main_file)
+    if not args.mining and is_file(main_file):
+        try:
+            append_to_mining(blocks, start, main_file)
+        except SystemExit as e:  # the file could not be read: the entries above are still on screen
+            print(f"Not added to the main mining file. {e}")
 
 
 def save_remaining(to_fix, remaining, next_number, args, config):
@@ -720,12 +778,22 @@ def banner():
 
 
 def positive(value):
-    if not value.isdecimal() or int(value) < 1:
+    if not value.isdecimal() or len(value) > 15 or int(value) < 1:
         raise argparse.ArgumentTypeError("must be a whole number, 1 or more")
     return int(value)
 
 
 def main():
+    try:
+        run()
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+    except BrokenPipeError:  # the program reading the output has closed
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
+
+
+def run():
     ap = argparse.ArgumentParser(description=__doc__,
                                  epilog="Definitions: Wiktionary (CC BY-SA), through kaikki.org.",
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -744,12 +812,12 @@ def main():
                     help="delete the saved dictionary data (your mining files are not touched)")
     ap.add_argument("--version", action="version", version=f"mintence {VERSION}")
     args = ap.parse_args()
-    for stream in (sys.stdout, sys.stderr):  # a terminal without UTF-8 must not stop the program
+    for stream in (sys.stdin, sys.stdout, sys.stderr):  # odd bytes or a non-UTF-8 terminal must not stop it
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
     for path in (args.input, args.mining):
-        if path and not Path(path).is_file():
+        if path and not is_file(path):
             ap.error(f"file not found: {path}")
 
     if args.clear_cache:
@@ -781,7 +849,7 @@ def main():
     # numbering that does not come from a mining file must be carried over
     # to the file of remaining entries
     keep_number = args.start is not None or given_start is not None or (
-        not args.mining and not Path(config.get("mining") or "").is_file())
+        not args.mining and not is_file(config.get("mining")))
     mining = args.mining or config.get("mining")
     mined = mined_words(mining)  # entries chosen during this run are added to it
     pos, number, skipped, to_fix, later = 0, start, [], [], []
@@ -809,7 +877,7 @@ def main():
     if remaining or to_fix:
         try:
             path = save_remaining(to_fix, remaining, number if keep_number else None, args, config)
-        except OSError as e:
+        except PATH_ERRORS as e:
             print(f"\nCould not save the entries left for later: {e}")
             return
         print(f"\n{plural(len(remaining) + len(to_fix), 'entry', 'entries')} left for later, "
