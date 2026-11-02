@@ -710,6 +710,15 @@ def save_remaining(to_fix, remaining, next_number, args, config):
     return target
 
 
+def banner():
+    """One line at the start of a run: "Mint" in purple only in a real terminal."""
+    color = (sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+             and os.environ.get("TERM") != "dumb"
+             and (os.name != "nt" or "WT_SESSION" in os.environ))
+    name = "\033[1;38;5;99mMint\033[0mence" if color else "Mintence"
+    print(f"{name} {VERSION} · sentence mining for English\n")
+
+
 def positive(value):
     if not value.isdecimal() or int(value) < 1:
         raise argparse.ArgumentTypeError("must be a whole number, 1 or more")
@@ -748,6 +757,7 @@ def main():
         print("Saved dictionary data deleted.")
         return
 
+    banner()
     try:
         config = load_config()
         if args.setup:

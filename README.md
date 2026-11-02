@@ -141,6 +141,7 @@ The first number of a run comes from, in order: `-n`, `-m`, `(number)` in the in
 - **Long lists** are done in rounds of 10. After each round, the entries are saved and Mintence asks whether to continue.
 - **Stopping halfway.** Answer `n` or press Ctrl+C, and the entries already chosen are kept. The rest go to a file such as `input_remaining.txt`, and `mintence input_remaining.txt` picks up where you left off. Words that could not be downloaded go there too.
 - **Definitions** are written by volunteers, so some are more technical than in a learner's dictionary, and a few words and expressions are missing, especially those with special characters (*a.m.*, *and/or*).
+- **Color.** The name at the start of a run is colored only in a terminal. Set `NO_COLOR` to turn it off.
 - Tested on Linux with Python 3.10, 3.11, 3.12 and 3.14.
 
 ## Contributing
