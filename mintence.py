@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Mintence -- bsgustavoa (#dheg)
+# Mintence -- gustavoamaralb (#dheg)
 """Mintence: open-source sentence mining for English, with data from Wiktionary.
 
 Give it the sentence where you found a word, choose the sense that fits, and get
@@ -43,7 +43,7 @@ except Exception:
     VERSION = "dev"
 
 SOURCE = "https://kaikki.org/dictionary/English/meaning/"
-HEADERS = {"User-Agent": f"mintence/{VERSION} (https://github.com/bsgustavoa/mintence)"}
+HEADERS = {"User-Agent": f"mintence/{VERSION} (https://github.com/gustavoamaralb/mintence)"}
 DELAY = 1.0      # seconds between requests
 MAX_WORDS = 10   # words per round
 CACHE_DAYS = 90  # how long a saved word stays fresh

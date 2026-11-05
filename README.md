@@ -31,7 +31,7 @@ Painstaking and careful not to miss or omit any detail.   ← the sense you chos
 ## Installation
 
 ```
-pipx install git+https://github.com/bsgustavoa/mintence
+pipx install git+https://github.com/gustavoamaralb/mintence
 ```
 
 [pipx](https://pipx.pypa.io) installs the `mintence` command in its own environment. `pip install` with the same address also works. Update with `pipx upgrade mintence`; remove with `pipx uninstall mintence`.
@@ -146,7 +146,7 @@ The first number of a run comes from, in order: `-n`, `-m`, `(number)` in the in
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome in the [issues](https://github.com/bsgustavoa/mintence/issues).
+Bug reports, ideas and pull requests are welcome in the [issues](https://github.com/gustavoamaralb/mintence/issues).
 
 ## Credits and license
 
